@@ -11,6 +11,8 @@ import datetime
 from .calendar.datatime_work import get_calendar
 from .config import API_TOKEN, DEBUG, TEST_TOKEN
 from .states import BookingTime
+from .UserServices import UserServices
+from .UserData import UserData
 
 
 storage = MemoryStorage()
@@ -43,8 +45,8 @@ async def return_start_info(message: types.Message):
     global list_buttons  # выбранные доп. услуги
     global user_data
     cart = Cart(chat_id=message.from_user.id)
-    list_buttons = []
-    user_data = dict()
+    list_buttons = UserServices(telegram_id=message.from_user.id)
+    user_data = UserData(telegram_id=message.from_user.id)
 
     for v_path in video_path:
         media_group.attach_video(types.InputFile(v_path))
@@ -62,7 +64,7 @@ async def return_start_info(message: types.Message):
 @dp.message_handler(text=['Студия', 'Только циклорама', 'Студия и гримерка'])
 async def choose_service(message: types.Message):
     '''При выборе того, что в text, возвращает кнопки с доп.услугами. При нажатии на кнопку без доп. услуг переходим к расписанию'''
-    list_buttons.append(message.text)
+    list_buttons.set_main_service(message.text)
     await message.answer(markdown.text(optional_services), reply_markup=optional_service_buttons)
 
 
@@ -70,23 +72,23 @@ async def choose_service(message: types.Message):
 async def list_of_chosen_services(message: types.Message):
     '''Добавляем товар в корзину, повторно возвращаем кнопки с доп товарами, если нажимается кнопка - этого достаточно, переходим к броне'''
     text = 'Еще что-то?'
-    if message.text in list_buttons:
-        chosen_items = ', '.join(str(elem) for elem in list_buttons)
+    if message.text in list_buttons.get_list_of_chosen_items(all=True):
+        chosen_items = list_buttons.get_list_of_chosen_items(True)
         warning = f'Вы не можете выбрать 2 одинаковых услуги.\nВыберите другую услугу или нажмите на кнопку - этого достаточно.\nВыбранные услуги - {chosen_items}'
         await message.answer(markdown.text(warning), reply_markup=choose_optional_service_buttons)
     else:
-        list_buttons.append(message.text)
+        list_buttons.add_optional_services(message.text)
         await message.answer(markdown.text(text), reply_markup=choose_optional_service_buttons)
 
 
 @dp.message_handler(text=['Без доп. услуг', 'Этого достаточно', 'Гримерка'])
 async def choose_booking_time(message: types.Message):
     if message.text == 'Этого достаточно':
-        for service in list_buttons[1:]:
+        for service in list_buttons.get_list_of_chosen_items(all=False):
             cart.add_to_cart(chat_id=message.from_user.id, service_name=service, service_price=price_dict[service])
     if message.text == 'Гримерка':
-        list_buttons.append(message.text)
-        cart.add_to_cart(chat_id=message.from_user.id, service_name=list_buttons[0], service_price=price_dict[list_buttons[0]])
+        list_buttons.add_optional_services(message.text)
+        cart.add_to_cart(chat_id=message.from_user.id, service_name=list_buttons.get_main_service(), service_price=price_dict[list_buttons.get_main_service()])
 
     await message.answer(markdown.text(calendar_text), reply_markup=get_time_buttons())
 
@@ -119,7 +121,7 @@ async def calendar_tap(call: types.CallbackQuery):
 
     timeMin = f'{current_date}T09:00:00+03:00'
     timeMax = f'{current_date}T22:00:00+03:00'
-    user_data['booking_date'] = f'{str(datetime.date.today())[:-5]}{month_for_calendar}-{day}'
+    user_data.set_booking_date(f'{str(datetime.date.today())[:-5]}{month_for_calendar}-{day}')
 
     events = get_calendar(timeMin=timeMin, timeMax=timeMax)
     free_time = ''
@@ -130,7 +132,7 @@ async def calendar_tap(call: types.CallbackQuery):
         end_event = event['end'][-14:-9]
         time_slots += f'{start_event} - {end_event}\n'
 
-    min_time = min_studio_booking_time if list_buttons[0] in ('Студия', 'Только циклорама') else min_booking_time
+    min_time = min_studio_booking_time if list_buttons.get_main_service() in ('Студия', 'Только циклорама') else min_booking_time
 
     if len(time_slots) < 1:
         time_slots = f'Весь {int(day)} день {month_for_client}-го месяца свободен'
@@ -157,7 +159,7 @@ async def back(call: types.CallbackQuery):
 
 @dp.callback_query_handler(text='booking_time')
 async def booking_time(call: types.CallbackQuery):
-    short_text = min_booking_time if list_buttons[0] not in ('Студия', 'Только циклорама') else min_studio_booking_time
+    short_text = min_booking_time if list_buttons.get_main_service() not in ('Студия', 'Только циклорама') else min_studio_booking_time
     await bot.edit_message_text(
         chat_id=call.from_user.id,
         text=f"Напоминаем!\nЗабронированное время:\n{time_slots}\n{booking_time_text}{short_text}",
@@ -180,29 +182,29 @@ async def get_booking_time(message: types.Message, state: FSMContext):
             if datetime.datetime.strptime(timeMin, '%H:%M') and datetime.datetime.strptime(timeMax, '%H:%M') and (timeMin >= '09:00' and timeMax <= '22:00'):
                 booking_hours = datetime.datetime.strptime(timeMax, '%H:%M') - datetime.datetime.strptime(timeMin, '%H:%M')
 
-                if list_buttons[0] not in ('Студия', 'Только циклорама') and '0:30:00' <= str(booking_hours) < '1:00:00':
+                if list_buttons.get_main_service() not in ('Студия', 'Только циклорама') and '0:30:00' <= str(booking_hours) < '1:00:00':
                     await state.finish()
-                    await message.answer(markdown.text(f'Вы выбрали {list_buttons[0]}, на 30 минут можно забронировать только Студию или циклораму.'), reply_markup=choose_service_buttons)
+                    await message.answer(markdown.text(f'Вы выбрали {list_buttons.get_main_service()}, на 30 минут можно забронировать только Студию или циклораму.'), reply_markup=choose_service_buttons)
 
-                elif list_buttons[0] not in ('Студия', 'Только циклорама') and str(booking_hours) >= '1:00:00':
+                elif list_buttons.get_main_service() not in ('Студия', 'Только циклорама') and str(booking_hours) >= '1:00:00':
                     await state.finish()
-                    user_data['timeMin'] = timeMin
-                    user_data['timeMax'] = timeMax
+                    user_data.set_timeMin(timeMin)
+                    user_data.set_timeMax(timeMax)
                     time_int = int(str(booking_hours)[0])
                     # time_min = int(str(booking_hours)[2])
                     # price = int()
                     # if time_min != 0:
                     #     price = (price_dict[list_buttons[0]] + price_dict[list_buttons[0] + ' 30 мин']) * time_int
                     # elif time_min == 0:
-                    price = price_dict[list_buttons[0]] * time_int
+                    price = price_dict[list_buttons.get_main_service()] * time_int
 
-                    cart.add_to_cart(chat_id=message.from_user.id, service_name=list_buttons[0],
+                    cart.add_to_cart(chat_id=message.from_user.id, service_name=list_buttons.get_main_service(),
                                      service_price=price)
 
                     await message.answer(markdown.text('Вы все ввели правильно, нажмите продолжить для оформления брони.'),
                                          reply_markup=continue_button)
 
-                elif list_buttons[0] in ('Студия', 'Только циклорама') and str(booking_hours) >= '0:30:00':
+                elif list_buttons.get_main_service() in ('Студия', 'Только циклорама') and str(booking_hours) >= '0:30:00':
                     for time_line in time_slots.split('\n'):
                         start = ''
                         end = ''
@@ -218,20 +220,20 @@ async def get_booking_time(message: types.Message, state: FSMContext):
                             if start:
                                 raise ex
                             else:
-                                user_data['timeMin'] = timeMin
-                                user_data['timeMax'] = timeMax
+                                user_data.set_timeMin(timeMin)
+                                user_data.set_timeMax(timeMax)
                                 await state.finish()
                                 if str(booking_hours) == '0:30:00':
-                                    cart.add_to_cart(chat_id=message.from_user.id, service_name=list_buttons[0], service_price=700)
+                                    cart.add_to_cart(chat_id=message.from_user.id, service_name=list_buttons.get_main_service(), service_price=700)
                                 elif str(booking_hours) >= '1:00:00':
                                     time_int = int(str(booking_hours)[0])
                                     time_min = int(str(booking_hours)[2])
                                     price = int()
                                     if time_min != 0:
-                                        price = (price_dict[list_buttons[0]] + price_dict[list_buttons[0] + ' 30м']) * time_int
+                                        price = (price_dict[list_buttons.get_main_service()] + price_dict[list_buttons.get_main_service() + ' 30м']) * time_int
                                     elif time_min == 0:
-                                        price = price_dict[list_buttons[0]] * time_int
-                                    cart.add_to_cart(chat_id=message.from_user.id, service_name=list_buttons[0], service_price=price)
+                                        price = price_dict[list_buttons.get_main_service()] * time_int
+                                    cart.add_to_cart(chat_id=message.from_user.id, service_name=list_buttons.get_main_service(), service_price=price)
 
                                 await message.answer(markdown.text('Вы все ввели правильно, нажмите продолжить для оформления брони.'), reply_markup=continue_button)
             else:
@@ -256,7 +258,7 @@ async def set_user_name(message: types.Message, state: FSMContext):
         if message.text[0] == '/':
             raise Exception
         name = message.text
-        user_data['name'] = name
+        user_data.set_name(name)
 
         await state.finish()
         await message.answer(text=get_user_phone_number)
@@ -273,7 +275,7 @@ async def set_user_phone_number(message: types.Message, state: FSMContext):
         number = message.text
 
         if ((len(number) == 11 or len(number) == 15) and number[0] == '8') or ((len(number) == 12 or len(number) == 16) and number[0] == '+'):
-            user_data['phone_number'] = number
+            user_data.set_phone_number(number)
             await state.finish()
             await message.answer(markdown.text("Нажмите оплата, если готовы перейти к оплате или назад, если ввели что то неправильно и хотите вернуться в самое начало."), reply_markup=go_to_payment)
         else:
@@ -288,7 +290,7 @@ async def set_user_phone_number(message: types.Message, state: FSMContext):
 
 @dp.message_handler(text=['Абонемент'])
 async def reply_about_season(message: types.Message):
-    list_buttons.append(message.text)
+    list_buttons.add_optional_services(message.text)
     await message.answer(markdown.text(text_season), reply_markup=seasons)
 
 
@@ -302,21 +304,21 @@ async def book_photograph(message: types.Message):
 
 @dp.message_handler(text=['5 часов', '10 часов', '15 часов', 'Оплата'])
 async def payment_requirements(message: types.Message):
-    owner_tg_id = '261452046'
+    owner_tg_id = '6065224517'
     chosen_season_time = None
     if message.text != 'Оплата':
         cart.add_to_cart(chat_id=message.from_user.id, service_price=price_dict[message.text], service_name=f'Абонемент на {message.text}')
-    chosen_items = ', '.join(str(elem) for elem in list_buttons)
+    chosen_items = list_buttons.get_list_of_chosen_items(all=True)
 
     for i in cart.total_services(chat_id=message.from_user.id):
         chosen_season_time = i
 
     price_check = cart.total_price(chat_id=message.from_user.id)
-    if list_buttons[0] != 'Абонемент':
-        row_data = user_data["booking_date"]
+    if list_buttons.get_main_service() != 'Абонемент':
+        row_data = user_data.get_booking_date()
         date_obj = datetime.datetime.strptime(row_data, '%Y-%m-%d')
         date = date_obj.strftime('%d-%m-%Y')
-        await bot.send_message(chat_id=owner_tg_id, text=f'В ближайшее время должна прийти оплата от {user_data["name"]} - {user_data["phone_number"]}.\nУслуги клиента - {chosen_items}\nДата - {date} с {user_data["timeMin"]} по {user_data["timeMax"]}')
+        await bot.send_message(chat_id=owner_tg_id, text=f'В ближайшее время должна прийти оплата от {user_data.get_name()} - {user_data.get_phone_number()}.\nУслуги клиента - {chosen_items}\nДата - {date} с {user_data.get_timeMin()} по {user_data.get_timeMax()}')
         await message.answer(f'Ваша корзина - {chosen_items}, стоимость которой составляет - {price_check}\n\n{payment_text}', reply_markup=apply_button)
     else:
         await message.answer(markdown.text(f'Ваша корзина - {chosen_season_time}, стоимость которой составляет - {price_check}\n\n{payment_text}.\n\nДля оформления новой брони нажмите кнопку /start в Меню.'), reply_markup=types.ReplyKeyboardRemove())
@@ -324,19 +326,19 @@ async def payment_requirements(message: types.Message):
 
 @dp.message_handler(text='Подтвердить')
 async def create_event_after_all(message: types.Message):
-    timeMin = f"{user_data['booking_date']}T{user_data['timeMin']}:00+03:00"
-    timeMax = f"{user_data['booking_date']}T{user_data['timeMax']}:00+03:00"
-    chosen_items = ', '.join(str(elem) for elem in list_buttons[1:])
+    timeMin = f"{user_data.get_booking_date()}T{user_data.get_timeMin()}:00+03:00"
+    timeMax = f"{user_data.get_booking_date()}T{user_data.get_timeMax()}:00+03:00"
+    chosen_items = list_buttons.get_list_of_chosen_items(all=False)
 
-    summary = f'Бронь с {user_data["timeMin"]} по {user_data["timeMax"]}'
-    description = f'{user_data["name"]} - {user_data["phone_number"]}. Услуги клиента - {chosen_items}'
+    summary = f'Бронь с {user_data.get_timeMin()} по {user_data.get_timeMax()}'
+    description = f'{user_data.get_name()} - {user_data.get_phone_number()}. Услуги клиента - {chosen_items}'
 
     calendar.add_event(calendar_id=calendar_id, time_start=timeMin, time_end=timeMax, summary=summary, description=description)
     if len(chosen_items) > 1:
-        await message.answer(markdown.text(f'Вы успешно забронировали {list_buttons[0]} на время {user_data["timeMin"]} - {user_data["timeMax"]}, с услугами - {chosen_items}.\n\nДля оформления новой брони нажмите кнопку /start в Меню.'), reply_markup=types.ReplyKeyboardRemove())
+        await message.answer(markdown.text(f'Вы успешно забронировали {list_buttons.get_main_service()} на время {user_data.get_timeMin()} - {user_data.get_timeMax()}, с услугами - {chosen_items}.\n\nДля оформления новой брони нажмите кнопку /start в Меню.'), reply_markup=types.ReplyKeyboardRemove())
     else:
         await message.answer(markdown.text(
-            f'Вы успешно забронировали {list_buttons[0]} на время {user_data["timeMin"]} - {user_data["timeMax"]}.\n\n{text_after_payment}\n\nДля оформления новой брони нажмите кнопку /start в Меню.'),
+            f'Вы успешно забронировали {list_buttons.get_main_service()} на время {user_data.get_timeMin()} - {user_data.get_timeMax()}.\n\n{text_after_payment}\n\nДля оформления новой брони нажмите кнопку /start в Меню.'),
                              reply_markup=types.ReplyKeyboardRemove())
 
 
