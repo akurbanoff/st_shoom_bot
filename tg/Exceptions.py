@@ -1,0 +1,2 @@
+class ChosenBusyTimeException(Exception):
+    pass

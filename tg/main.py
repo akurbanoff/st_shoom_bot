@@ -1,8 +1,12 @@
+import logging
+
 import sentry_sdk
-from aiogram import types, Bot, Dispatcher
+from aiogram import Bot, Dispatcher
 from aiogram.contrib.fsm_storage.memory import MemoryStorage
 from aiogram.dispatcher import FSMContext
 from aiogram.utils import markdown, executor
+
+from .Exceptions import ChosenBusyTimeException
 from .cart import Cart
 from .content.text import *
 from .keybords import *
@@ -14,6 +18,7 @@ from .states import BookingTime
 from .UserServices import UserServices
 from .UserData import UserData
 
+logging.basicConfig(level=logging.INFO)
 
 storage = MemoryStorage()
 if DEBUG == 'True':
@@ -87,7 +92,7 @@ async def choose_booking_time(message: types.Message):
         for service in list_buttons.get_list_of_chosen_items(all=False):
             cart.add_to_cart(chat_id=message.from_user.id, service_name=service, service_price=price_dict[service])
     if message.text == 'Гримерка':
-        list_buttons.add_optional_services(message.text)
+        list_buttons.main_service(message.text)
         cart.add_to_cart(chat_id=message.from_user.id, service_name=list_buttons.get_main_service(), service_price=price_dict[list_buttons.get_main_service()])
 
     await message.answer(markdown.text(calendar_text), reply_markup=get_time_buttons())
@@ -178,8 +183,10 @@ async def get_booking_time(message: types.Message, state: FSMContext):
         timeMax = str(time.split('-')[1].strip()).zfill(4)
         booking_hours = None
 
-        try:
-            if datetime.datetime.strptime(timeMin, '%H:%M') and datetime.datetime.strptime(timeMax, '%H:%M') and (timeMin >= '09:00' and timeMax <= '22:00'):
+        #logging.info("aaaa", datetime.datetime.strptime(timeMin, '%H:%M'), timeMax)
+
+        #try:
+        if datetime.datetime.strptime(timeMin, '%H:%M') and datetime.datetime.strptime(timeMax, '%H:%M') and (timeMin >= '9:00' and timeMax <= '22:00'):
                 booking_hours = datetime.datetime.strptime(timeMax, '%H:%M') - datetime.datetime.strptime(timeMin, '%H:%M')
 
                 if list_buttons.get_main_service() not in ('Студия', 'Только циклорама') and '0:30:00' <= str(booking_hours) < '1:00:00':
@@ -187,22 +194,42 @@ async def get_booking_time(message: types.Message, state: FSMContext):
                     await message.answer(markdown.text(f'Вы выбрали {list_buttons.get_main_service()}, на 30 минут можно забронировать только Студию или циклораму.'), reply_markup=choose_service_buttons)
 
                 elif list_buttons.get_main_service() not in ('Студия', 'Только циклорама') and str(booking_hours) >= '1:00:00':
-                    await state.finish()
-                    user_data.set_timeMin(timeMin)
-                    user_data.set_timeMax(timeMax)
-                    time_int = int(str(booking_hours)[0])
-                    # time_min = int(str(booking_hours)[2])
-                    # price = int()
-                    # if time_min != 0:
-                    #     price = (price_dict[list_buttons[0]] + price_dict[list_buttons[0] + ' 30 мин']) * time_int
-                    # elif time_min == 0:
-                    price = price_dict[list_buttons.get_main_service()] * time_int
+                    for time_line in time_slots.split('\n'):
+                        start = ''
+                        end = ''
+                        try:
+                            start = time_line.split('-')[0].strip()
+                            end = time_line.split('-')[1].strip()
+                            start = datetime.datetime.strptime(start, '%H:%M')
+                            end = datetime.datetime.strptime(end, '%H:%M')
 
-                    cart.add_to_cart(chat_id=message.from_user.id, service_name=list_buttons.get_main_service(),
-                                     service_price=price)
+                            if (start < datetime.datetime.strptime(timeMin, '%H:%M') < end) or start < datetime.datetime.strptime(timeMax, '%H:%M') < end:
+                                raise ChosenBusyTimeException()
 
-                    await message.answer(markdown.text('Вы все ввели правильно, нажмите продолжить для оформления брони.'),
-                                         reply_markup=continue_button)
+                        except ChosenBusyTimeException as cbte:
+                            await message.answer(markdown.text(f"Вы выбрали уже забронированное время - {timeMin} - {timeMax}. Пожалуйста выберите то время, которое не отображается в сообщении о занятом времени"))
+                            break
+
+                        except IndexError as ex:
+                            if start:
+                                raise ex
+                            else:
+                                await state.finish()
+                                user_data.set_timeMin(timeMin)
+                                user_data.set_timeMax(timeMax)
+                                time_int = int(str(booking_hours)[0])
+                                # time_min = int(str(booking_hours)[2])
+                                # price = int()
+                                # if time_min != 0:
+                                #     price = (price_dict[list_buttons[0]] + price_dict[list_buttons[0] + ' 30 мин']) * time_int
+                                # elif time_min == 0:
+                                price = price_dict[list_buttons.get_main_service()] * time_int
+
+                                cart.add_to_cart(chat_id=message.from_user.id, service_name=list_buttons.get_main_service(),
+                                                 service_price=price)
+
+                                await message.answer(markdown.text('Вы все ввели правильно, нажмите продолжить для оформления брони.'),
+                                                     reply_markup=continue_button)
 
                 elif list_buttons.get_main_service() in ('Студия', 'Только циклорама') and str(booking_hours) >= '0:30:00':
                     for time_line in time_slots.split('\n'):
@@ -215,7 +242,12 @@ async def get_booking_time(message: types.Message, state: FSMContext):
                             end = datetime.datetime.strptime(end, '%H:%M')
 
                             if (start < datetime.datetime.strptime(timeMin, '%H:%M') < end) or start < datetime.datetime.strptime(timeMax, '%H:%M') < end:
-                                raise Exception
+                                raise ChosenBusyTimeException()
+
+                        except ChosenBusyTimeException as cbte:
+                            await message.answer(markdown.text(f"Вы выбрали уже забронированное время - {timeMin} - {timeMax}. Пожалуйста выберите то время, которое не отображается в сообщении о занятом времени"))
+                            break
+
                         except IndexError as ex:
                             if start:
                                 raise ex
@@ -236,14 +268,19 @@ async def get_booking_time(message: types.Message, state: FSMContext):
                                     cart.add_to_cart(chat_id=message.from_user.id, service_name=list_buttons.get_main_service(), service_price=price)
 
                                 await message.answer(markdown.text('Вы все ввели правильно, нажмите продолжить для оформления брони.'), reply_markup=continue_button)
-            else:
-                raise Exception
-        except Exception as ex:
-            await message.answer(markdown.text(f'Вы ввели не правильноe время для записи. Возможно вы ввели то время которое уже занято.\n\n{booking_time_text}Время работы студии с 9:00 до 22:00'))
-    except Exception as exe:
-        if message.text in ('/start', '/help'):
+        else:
+            message.answer(markdown.text(f'Вы ввели слишком раннее или слишком позднее время. Студия начинает работу с 9 утра до 22 вечера.'))
+    #         else:
+    #             raise Exception
+    #     except Exception as ex:
+    #         await message.answer(markdown.text(f'Вы ввели не правильноe время для записи. Возможно вы ввели то время которое уже занято.\n\n{booking_time_text}Время работы студии с 9:00 до 22:00'))
+    except IndexError as exe:
+        if message.text == '/start':
             await state.finish()
-            await message.answer(markdown.text('Пожалуйста повторите команду снова.'))
+            await return_start_info(message=message)
+        elif message.text == '/help':
+            await state.finish()
+            await return_start_info(message)
 
 
 @dp.message_handler(text='Продолжить')
@@ -290,7 +327,7 @@ async def set_user_phone_number(message: types.Message, state: FSMContext):
 
 @dp.message_handler(text=['Абонемент'])
 async def reply_about_season(message: types.Message):
-    list_buttons.add_optional_services(message.text)
+    list_buttons.main_service(message.text)
     await message.answer(markdown.text(text_season), reply_markup=seasons)
 
 
