@@ -8,7 +8,6 @@ from dateutil.relativedelta import relativedelta
 
 choose_service_buttons = types.ReplyKeyboardMarkup(resize_keyboard=True).add(
     types.KeyboardButton('Студия'),
-    types.KeyboardButton('Только циклорама'),
     types.KeyboardButton('Гримерка'),
     types.KeyboardButton('Студия и гримерка'),
     types.KeyboardButton('Фотограф'),

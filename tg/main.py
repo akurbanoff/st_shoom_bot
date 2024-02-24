@@ -66,7 +66,7 @@ async def return_start_info(message: types.Message):
         await message.answer(markdown.text(contacts))
 
 
-@dp.message_handler(text=['Студия', 'Только циклорама', 'Студия и гримерка'])
+@dp.message_handler(text=['Студия', 'Студия и гримерка'])
 async def choose_service(message: types.Message):
     '''При выборе того, что в text, возвращает кнопки с доп.услугами. При нажатии на кнопку без доп. услуг переходим к расписанию'''
     list_buttons.set_main_service(message.text)
@@ -137,7 +137,7 @@ async def calendar_tap(call: types.CallbackQuery):
         end_event = event['end'][-14:-9]
         time_slots += f'{start_event} - {end_event}\n'
 
-    min_time = min_studio_booking_time if list_buttons.get_main_service() in ('Студия', 'Только циклорама') else min_booking_time
+    min_time = min_studio_booking_time if list_buttons.get_main_service() in ('Студия', ) else min_booking_time
 
     if len(time_slots) < 1:
         time_slots = f'Весь {int(day)} день {month_for_client}-го месяца свободен'
@@ -164,7 +164,7 @@ async def back(call: types.CallbackQuery):
 
 @dp.callback_query_handler(text='booking_time')
 async def booking_time(call: types.CallbackQuery):
-    short_text = min_booking_time if list_buttons.get_main_service() not in ('Студия', 'Только циклорама') else min_studio_booking_time
+    short_text = min_booking_time if list_buttons.get_main_service() not in ('Студия', ) else min_studio_booking_time
     await bot.edit_message_text(
         chat_id=call.from_user.id,
         text=f"Напоминаем!\nЗабронированное время:\n{time_slots}\n{booking_time_text}{short_text}",
@@ -189,11 +189,11 @@ async def get_booking_time(message: types.Message, state: FSMContext):
         if datetime.datetime.strptime(timeMin, '%H:%M') and datetime.datetime.strptime(timeMax, '%H:%M') and (timeMin >= '9:00' and timeMax <= '22:00'):
                 booking_hours = datetime.datetime.strptime(timeMax, '%H:%M') - datetime.datetime.strptime(timeMin, '%H:%M')
 
-                if list_buttons.get_main_service() not in ('Студия', 'Только циклорама') and '0:30:00' <= str(booking_hours) < '1:00:00':
+                if list_buttons.get_main_service() not in ('Студия',) and '0:30:00' <= str(booking_hours) < '1:00:00':
                     await state.finish()
-                    await message.answer(markdown.text(f'Вы выбрали {list_buttons.get_main_service()}, на 30 минут можно забронировать только Студию или циклораму.'), reply_markup=choose_service_buttons)
+                    await message.answer(markdown.text(f'Вы выбрали {list_buttons.get_main_service()}, на 30 минут можно забронировать только Студию.'), reply_markup=choose_service_buttons)
 
-                elif list_buttons.get_main_service() not in ('Студия', 'Только циклорама') and str(booking_hours) >= '1:00:00':
+                elif list_buttons.get_main_service() not in ('Студия', ) and str(booking_hours) >= '1:00:00':
                     for time_line in time_slots.split('\n'):
                         start = ''
                         end = ''
@@ -231,7 +231,7 @@ async def get_booking_time(message: types.Message, state: FSMContext):
                                 await message.answer(markdown.text('Вы все ввели правильно, нажмите продолжить для оформления брони.'),
                                                      reply_markup=continue_button)
 
-                elif list_buttons.get_main_service() in ('Студия', 'Только циклорама') and str(booking_hours) >= '0:30:00':
+                elif list_buttons.get_main_service() in ('Студия', ) and str(booking_hours) >= '0:30:00':
                     for time_line in time_slots.split('\n'):
                         start = ''
                         end = ''
